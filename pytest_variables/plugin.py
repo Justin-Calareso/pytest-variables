@@ -6,6 +6,8 @@ import os.path
 import sys
 import warnings
 import io
+import pymysql
+import json
 
 import pytest
 from functools import reduce
@@ -22,7 +24,8 @@ parser_table = {
     'json': ('json', default),
     'hjson': ('hjson', default),
     'yml': ('yaml', default),
-    'yaml': ('yaml', default)}
+    'yaml': ('yaml', default),
+    'mysql': ('mysql', default)}
 
 
 def import_parser(path, import_type, parser_func):
@@ -70,24 +73,57 @@ def pytest_configure(config):
     config._variables = {}
     paths = config.getoption('variables')
     for path in paths:
-        ext = os.path.splitext(path)[1][1:].lower() or 'json'
-        try:
-            variables = import_parser(path, *parser_table[ext])
-        except KeyError:
-            warnings.warn(UserWarning(
-                "Could not find a parser for the file extension '{0}'. "
-                'Supported extensions are: {1}'.format(
-                    ext, ', '.join(sorted(parser_table.keys())))))
-            variables = import_parser(path, *parser_table['json'])
-        except ValueError as e:
-            raise errors.ValueError('Unable to parse {0}: {1}'.format(
-                path, e))
+        if path == 'mysql':
+            variables = mysql_json()
+        else:
+            ext = os.path.splitext(path)[1][1:].lower() or 'json'
+            try:
+                variables = import_parser(path, *parser_table[ext])
+            except KeyError:
+                warnings.warn(UserWarning(
+                    "Could not find a parser for the file extension '{0}'. "
+                    'Supported extensions are: {1}'.format(
+                        ext, ', '.join(sorted(parser_table.keys())))))
+                variables = import_parser(path, *parser_table['json'])
+            except ValueError as e:
+                raise errors.ValueError('Unable to parse {0}: {1}'.format(
+                    path, e))
 
         if not isinstance(variables, dict):
             raise errors.ValueError('Unable to parse {0}'.format(
                 path))
 
         reduce(_merge, [config._variables, variables])
+
+
+def mysql_json():
+    rds_host = os.getenv("RDS_HOST", "default value")
+    name = os.getenv("NAME", "default value")
+    password = os.getenv("PASSWORD", "default value")
+    db_name = os.getenv("DB_NAME", "default value")
+    try:
+        conn = pymysql.connect(
+            rds_host,
+            user=name,
+            passwd=password,
+            db=db_name,
+            connect_timeout=5,
+            autocommit=True,
+        )
+
+    except Exception as e:
+        print("Unable to connect")
+        exit(10)
+
+    config_id = 1  # TODO: figure out how to figure this out
+    sql_string = 'SELECT j_inputs FROM unit_test_config WHERE id = ' + str(config_id) + ';'
+
+    cursor = conn.cursor()
+    cursor.execute(sql_string)
+    json_str = cursor.fetchone()[0]
+    new_dict = json.loads(json_str)
+
+    return new_dict
 
 
 @pytest.fixture(scope='session')
